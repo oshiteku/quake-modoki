@@ -112,7 +112,7 @@ pub fn menu_receiver() -> &'static muda::MenuEventReceiver {
 /// Load icon from embedded Windows resource
 fn create_default_icon() -> Result<Icon, TrayError> {
     // Resource ordinal 1 = icon set by winres in build.rs
-    Icon::from_resource(1, Some((16, 16))).map_err(|e| TrayError::Creation(e.to_string()))
+    Icon::from_resource(1, None).map_err(|e| TrayError::Creation(e.to_string()))
 }
 
 /// Truncate title with ellipsis if too long
