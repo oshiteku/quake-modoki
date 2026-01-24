@@ -115,12 +115,17 @@ fn create_default_icon() -> Result<Icon, TrayError> {
     Icon::from_resource(1, None).map_err(|e| TrayError::Creation(e.to_string()))
 }
 
-/// Truncate title with ellipsis if too long
-fn truncate_title(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+/// Truncate title with ellipsis if too long (char-based, UTF-8 safe)
+fn truncate_title(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        let end = s
+            .char_indices()
+            .nth(max_chars.saturating_sub(3))
+            .map(|(i, _)| i)
+            .unwrap_or(s.len());
+        format!("{}...", &s[..end])
     }
 }
 
@@ -141,5 +146,23 @@ mod tests {
     #[test]
     fn test_truncate_title_long() {
         assert_eq!(truncate_title("Hello World Long", 10), "Hello W...");
+    }
+
+    #[test]
+    fn test_truncate_title_unicode_middle_dot() {
+        // Exact string from panic: byte 27 falls inside · (bytes 26..28)
+        let s = "Issue Quake · Issue #268 · oshiteku/memo - Google Chrome";
+        let result = truncate_title(s, 30);
+        assert!(result.ends_with("..."));
+        assert!(result.chars().count() <= 30);
+    }
+
+    #[test]
+    fn test_truncate_title_emoji() {
+        // 🔥 = U+1F525 (4 bytes in UTF-8)
+        let s = "🔥 Hot Topic 🔥";
+        let result = truncate_title(s, 10);
+        assert!(result.ends_with("..."));
+        assert!(result.chars().count() <= 10);
     }
 }
