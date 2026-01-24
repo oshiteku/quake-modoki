@@ -186,9 +186,7 @@ fn toggle_window() {
         }
 
         // 4. Slide out
-        if let Err(e) = run_animation(hwnd, &config, direction, &bounds, &work_area, false) {
-            error!("Animation error: {e}");
-        }
+        run_animation(hwnd, &config, direction, &bounds, &work_area, false);
         WINDOW_VISIBLE.store(false, Ordering::SeqCst);
         info!(direction = ?direction, "Window: focus restored → slide out → hidden");
     } else {
@@ -205,9 +203,7 @@ fn toggle_window() {
         focus::save_previous(prev);
 
         // 4. Slide in
-        if let Err(e) = run_animation(hwnd, &config, direction, &bounds, &work_area, true) {
-            error!("Animation error: {e}");
-        }
+        run_animation(hwnd, &config, direction, &bounds, &work_area, true);
         let _ = unsafe { SetForegroundWindow(hwnd) };
         focus::set_target(hwnd);
         if let Err(e) = focus::install_hook(hwnd) {
@@ -250,9 +246,7 @@ fn handle_focus_lost() {
     let direction = tracking::calc_direction(&bounds, &work_area);
 
     let config = AnimConfig::default();
-    if let Err(e) = run_animation(target, &config, direction, &bounds, &work_area, false) {
-        error!("Animation error: {e}");
-    }
+    run_animation(target, &config, direction, &bounds, &work_area, false);
     WINDOW_VISIBLE.store(false, Ordering::SeqCst);
     info!(direction = ?direction, "Window: focus lost → hidden");
 }
