@@ -1,12 +1,20 @@
+mod animation;
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use animation::{AnimConfig, run_animation};
 use windows::Win32::Foundation::{HWND, LPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_F8,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, FindWindowW, GetMessageW, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,
-    MSG, SW_HIDE, SW_SHOW, ShowWindow, WM_HOTKEY,
+    MSG, WM_HOTKEY,
 };
 use windows::core::{BOOL, w};
+
+/// Track window visibility state (atomic for thread safety)
+static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 const HOTKEY_ID: i32 = 1;
 
@@ -61,13 +69,20 @@ fn toggle_notepad() {
     let hwnd = unsafe { FindWindowW(None, w!("タイトルなし - メモ帳")) };
     match hwnd {
         Ok(h) if h != HWND::default() => {
-            let visible = unsafe { IsWindowVisible(h) }.as_bool();
-            let cmd = if visible { SW_HIDE } else { SW_SHOW };
-            let _ = unsafe { ShowWindow(h, cmd) };
-            println!(
-                "Notepad toggled: {}",
-                if visible { "hidden" } else { "shown" }
-            );
+            let config = AnimConfig::default();
+            let currently_visible = WINDOW_VISIBLE.load(Ordering::SeqCst);
+
+            if currently_visible {
+                // Slide out (visible → hidden)
+                run_animation(h, &config, false);
+                WINDOW_VISIBLE.store(false, Ordering::SeqCst);
+                println!("Notepad: slide out → hidden");
+            } else {
+                // Slide in (hidden → visible)
+                run_animation(h, &config, true);
+                WINDOW_VISIBLE.store(true, Ordering::SeqCst);
+                println!("Notepad: slide in → visible");
+            }
         }
         _ => {
             println!("Notepad not found");
