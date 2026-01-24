@@ -2,7 +2,6 @@
 
 use thiserror::Error;
 
-
 /// Focus tracking errors (graceful degradation)
 #[derive(Debug, Error)]
 pub enum FocusError {
