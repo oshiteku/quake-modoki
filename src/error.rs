@@ -2,31 +2,6 @@
 
 use thiserror::Error;
 
-/// Hotkey registration/unregistration errors (fatal)
-#[derive(Debug, Error)]
-pub enum HotkeyError {
-    #[error("RegisterHotKey({id}): {source}")]
-    Register {
-        id: i32,
-        #[source]
-        source: windows::core::Error,
-    },
-
-    #[error("UnregisterHotKey({id}): {source}")]
-    Unregister {
-        id: i32,
-        #[source]
-        source: windows::core::Error,
-    },
-}
-
-/// Window operation errors
-#[derive(Debug, Error)]
-pub enum WindowError {
-    #[error("FindWindow(\"{pattern}\") → ∅")]
-    NotFound { pattern: String },
-}
-
 /// Animation errors (graceful degradation)
 #[derive(Debug, Error)]
 pub enum AnimationError {
