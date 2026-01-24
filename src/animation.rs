@@ -7,7 +7,7 @@ use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+    GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOZORDER,
     SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, WS_EX_COMPOSITED,
 };
 
@@ -189,8 +189,12 @@ pub fn run_animation(hwnd: HWND, config: &AnimConfig, slide_in: bool) {
         let (x, y) = calc_position(config.direction, &work_area, width, height, t, slide_in);
 
         // Atomic hide: combine final position with SWP_HIDEWINDOW
+        // slide_in: allow activation (no SWP_NOACTIVATE)
+        // slide_out: prevent activation + hide at final frame
         let flags = if is_final && !slide_in {
             SWP_NOACTIVATE | SWP_HIDEWINDOW
+        } else if slide_in {
+            SWP_NOZORDER // allow activation during slide_in
         } else {
             SWP_NOACTIVATE
         };

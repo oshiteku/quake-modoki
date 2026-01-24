@@ -1,4 +1,5 @@
 mod animation;
+mod focus;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -9,7 +10,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, FindWindowW, GetMessageW, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,
-    MSG, WM_HOTKEY,
+    MSG, SetForegroundWindow, WM_HOTKEY,
 };
 use windows::core::{BOOL, w};
 
@@ -27,16 +28,23 @@ fn main() -> anyhow::Result<()> {
         RegisterHotKey(None, HOTKEY_ID, MOD_NOREPEAT, VK_F8.0 as u32)?;
     }
 
-    println!("Hotkey F8 registered. Press F8 to toggle Notepad visibility.");
+    println!("Hotkey F8 registered. Press F8 to toggle window visibility.");
     println!("Press Ctrl+C to exit.");
 
     let mut msg = MSG::default();
     while unsafe { GetMessageW(&mut msg, None, 0, 0) }.as_bool() {
-        if msg.message == WM_HOTKEY && msg.wParam.0 as i32 == HOTKEY_ID {
-            toggle_notepad();
+        match msg.message {
+            WM_HOTKEY if msg.wParam.0 as i32 == HOTKEY_ID => {
+                toggle_window();
+            }
+            m if m == focus::WM_FOCUS_CHANGED => {
+                handle_focus_lost();
+            }
+            _ => {}
         }
     }
 
+    focus::uninstall_hook();
     unsafe { UnregisterHotKey(None, HOTKEY_ID)? };
 
     Ok(())
@@ -76,16 +84,35 @@ fn toggle_notepad() {
                 // Slide out (visible → hidden)
                 run_animation(h, &config, false);
                 WINDOW_VISIBLE.store(false, Ordering::SeqCst);
-                println!("Notepad: slide out → hidden");
+                println!("Window: slide out → hidden");
             } else {
                 // Slide in (hidden → visible)
                 run_animation(h, &config, true);
+                let _ = unsafe { SetForegroundWindow(h) };
+                focus::set_target(h);
+                focus::install_hook(h);
                 WINDOW_VISIBLE.store(true, Ordering::SeqCst);
-                println!("Notepad: slide in → visible");
+                println!("Window: slide in → visible + focused");
             }
         }
         _ => {
-            println!("Notepad not found");
+            println!("Target window not found");
         }
     }
+}
+
+fn handle_focus_lost() {
+    if !WINDOW_VISIBLE.load(Ordering::SeqCst) {
+        return;
+    }
+
+    let target = focus::get_target();
+    if target == HWND::default() {
+        return;
+    }
+
+    let config = AnimConfig::default();
+    run_animation(target, &config, false);
+    WINDOW_VISIBLE.store(false, Ordering::SeqCst);
+    println!("Window: focus lost → hidden");
 }
