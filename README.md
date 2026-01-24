@@ -4,9 +4,16 @@
 
 Windows utility enabling Quake Mode behavior—any window slides in/out from screen edge via global hotkey.
 
-## Requirements
+## Features
 
-- Windows 10/11 (64-bit)
+- 🎯 **Track any window** — Register current foreground window via `Ctrl+Alt+Q`
+- 🎬 **Smooth slide animation** — 200ms cubic easing, DWM frame-synced
+- 🧭 **Smart direction detection** — Auto-detect slide direction from window position
+- 👁️ **Auto-hide on focus loss** — Window slides out when focus changes
+- 🔄 **State preservation** — Original position/size/z-order restored on untrack
+- 🖥️ **System tray** — Status, Untrack, Start with Windows, Exit
+- 🔔 **Desktop notification** — Toast when window tracked
+- 🚀 **Auto-launch** — Optional startup with Windows (Registry-based)
 
 ## Installation
 
