@@ -109,20 +109,10 @@ pub fn menu_receiver() -> &'static muda::MenuEventReceiver {
     MenuEvent::receiver()
 }
 
-/// Create simple default icon (16x16 cyan square)
+/// Load icon from embedded Windows resource
 fn create_default_icon() -> Result<Icon, TrayError> {
-    const SIZE: usize = 16;
-    let mut rgba = vec![0u8; SIZE * SIZE * 4];
-
-    // Fill with cyan color (R=0, G=200, B=200, A=255)
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel[0] = 0; // R
-        pixel[1] = 200; // G
-        pixel[2] = 200; // B
-        pixel[3] = 255; // A
-    }
-
-    Icon::from_rgba(rgba, SIZE as u32, SIZE as u32).map_err(|e| TrayError::Creation(e.to_string()))
+    // Resource ordinal 1 = icon set by winres in build.rs
+    Icon::from_resource(1, Some((16, 16))).map_err(|e| TrayError::Creation(e.to_string()))
 }
 
 /// Truncate title with ellipsis if too long
@@ -151,12 +141,5 @@ mod tests {
     #[test]
     fn test_truncate_title_long() {
         assert_eq!(truncate_title("Hello World Long", 10), "Hello W...");
-    }
-
-    #[test]
-    fn test_create_default_icon() {
-        // Should not panic
-        let icon = create_default_icon();
-        assert!(icon.is_ok());
     }
 }
