@@ -59,7 +59,7 @@ impl TrayState {
         // Build tray icon
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip("quake-modoki")
+            .with_tooltip("Quake Modoki")
             .with_icon(icon)
             .build()
             .map_err(|e| TrayError::Creation(e.to_string()))?;

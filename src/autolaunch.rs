@@ -6,7 +6,7 @@ use winreg::RegKey;
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const APP_NAME: &str = "quake-modoki";
+const APP_NAME: &str = "Quake Modoki";
 
 #[derive(Debug, Error)]
 pub enum AutoLaunchError {

@@ -1,4 +1,4 @@
-# quake-modoki
+# Quake Modoki
 
 Windows utility enabling Quake Mode behavior—any window slides in/out from screen edge via global hotkey.
 

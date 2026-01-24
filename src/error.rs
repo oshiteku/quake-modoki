@@ -1,4 +1,4 @@
-//! Error types for quake-modoki
+//! Error types for Quake Modoki
 
 use thiserror::Error;
 
