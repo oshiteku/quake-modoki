@@ -5,7 +5,21 @@ Windows utility enabling Quake Mode behavior—any window slides in/out from scr
 ## Requirements
 
 - Windows 10/11 (64-bit)
-- Rust (Edition 2024)
+
+## Installation
+
+```bash
+cargo install quake-modoki --locked
+```
+
+## Usage
+
+| Hotkey | Action |
+|--------|--------|
+| `Ctrl+Alt+Q` | Track current window |
+| `F8` | Toggle window visibility |
+
+Tray icon menu: Untrack / Start with Windows / Exit
 
 ## Development
 
