@@ -1,0 +1,8 @@
+# quake-modoki
+
+Windows utility enabling Quake Mode behavior—any window slides in/out from screen edge via global hotkey.
+
+## Requirements
+
+- Windows 10/11 (64-bit)
+- Rust (Edition 2024)
