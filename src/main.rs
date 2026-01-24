@@ -6,20 +6,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, error, info, trace, warn};
 
 use animation::{AnimConfig, run_animation};
+use global_hotkey::hotkey::{Code, HotKey};
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use windows::Win32::Foundation::{HWND, LPARAM};
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_F8,
-};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, FindWindowW, GetForegroundWindow, GetMessageW, GetWindowTextLengthW,
-    GetWindowTextW, IsWindowVisible, MSG, SetForegroundWindow, WM_HOTKEY,
+    DispatchMessageW, EnumWindows, FindWindowW, GetForegroundWindow, GetWindowTextLengthW,
+    GetWindowTextW, IsWindowVisible, MsgWaitForMultipleObjectsEx, PeekMessageW,
+    SetForegroundWindow, TranslateMessage, MWMO_INPUTAVAILABLE, MSG, PM_REMOVE, QS_ALLINPUT,
+    WM_QUIT,
 };
 use windows::core::{BOOL, w};
 
 /// Track window visibility state (atomic for thread safety)
 static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false);
-
-const HOTKEY_ID: i32 = 1;
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -28,32 +27,56 @@ fn main() -> anyhow::Result<()> {
     list_windows();
     debug!("===================");
 
-    unsafe {
-        RegisterHotKey(None, HOTKEY_ID, MOD_NOREPEAT, VK_F8.0 as u32)?;
-    }
+    let manager = GlobalHotKeyManager::new()
+        .map_err(|e| anyhow::anyhow!("GlobalHotKeyManager: {e}"))?;
+    let hotkey = HotKey::new(None, Code::F8);
+    manager
+        .register(hotkey)
+        .map_err(|e| anyhow::anyhow!("Hotkey register: {e}"))?;
 
-    info!("Hotkey F8 registered. Press F8 to toggle window visibility.");
+    info!("Hotkey F8 registered (global-hotkey). Press F8 to toggle window visibility.");
     info!("Press Ctrl+C to exit.");
 
-    let mut msg = MSG::default();
-    while unsafe { GetMessageW(&mut msg, None, 0, 0) }.as_bool() {
-        match msg.message {
-            WM_HOTKEY if msg.wParam.0 as i32 == HOTKEY_ID => {
-                toggle_window();
-            }
-            m if m == focus::WM_FOCUS_CHANGED => {
-                handle_focus_lost();
-            }
-            _ => {}
-        }
-    }
+    run_event_loop()?;
 
     if let Err(e) = focus::uninstall_hook() {
         error!("Focus unhook error: {e}");
     }
-    unsafe { UnregisterHotKey(None, HOTKEY_ID)? };
 
     Ok(())
+}
+
+fn run_event_loop() -> anyhow::Result<()> {
+    let receiver = GlobalHotKeyEvent::receiver();
+    let mut msg = MSG::default();
+
+    loop {
+        // Wait for message OR 16ms timeout
+        unsafe {
+            MsgWaitForMultipleObjectsEx(None, 16, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        }
+
+        // Check hotkey events (non-blocking)
+        while let Ok(event) = receiver.try_recv() {
+            if event.state() == HotKeyState::Pressed {
+                toggle_window();
+            }
+        }
+
+        // Process Win32 messages
+        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+            if msg.message == WM_QUIT {
+                return Ok(());
+            }
+            match msg.message {
+                m if m == focus::WM_FOCUS_CHANGED => handle_focus_lost(),
+                _ => unsafe {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                },
+            }
+        }
+    }
 }
 
 fn list_windows() {
