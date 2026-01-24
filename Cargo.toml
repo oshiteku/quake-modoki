@@ -10,6 +10,14 @@ homepage = "https://github.com/oshiteku/quake-modoki"
 readme = "README.md"
 keywords = ["windows", "hotkey", "window-manager"]
 categories = ["command-line-utilities"]
+exclude = [
+    ".claude/",
+    ".github/",
+    ".pre-commit-config.yaml",
+    "CLAUDE.md",
+    "assets/icon.png",
+    "assets/demo.gif",
+]
 
 [dependencies]
 anyhow = "1.0.100"
