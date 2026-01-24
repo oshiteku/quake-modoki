@@ -2,13 +2,6 @@
 
 use thiserror::Error;
 
-/// Animation errors (graceful degradation)
-#[derive(Debug, Error)]
-pub enum AnimationError {
-    #[error("GetMonitorInfo failed")]
-    MonitorInfo,
-}
-
 /// Focus tracking errors (graceful degradation)
 #[derive(Debug, Error)]
 pub enum FocusError {
@@ -22,12 +15,6 @@ pub enum FocusError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_animation_error_display() {
-        let err = AnimationError::MonitorInfo;
-        assert_eq!(err.to_string(), "GetMonitorInfo failed");
-    }
 
     #[test]
     fn test_focus_error_display() {

@@ -57,7 +57,7 @@ pub fn is_tracked_valid() -> bool {
 /// Returns captured bounds, or None if GetWindowRect fails
 pub fn save_bounds(hwnd: HWND) -> Option<WindowBounds> {
     let mut rect = RECT::default();
-    if !unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
         return None;
     }
 
@@ -82,8 +82,9 @@ pub fn load_bounds() -> Option<WindowBounds> {
     }
 }
 
-/// Clear stored bounds
-pub fn clear_bounds() {
+/// Clear stored bounds (test-only)
+#[cfg(test)]
+fn clear_bounds() {
     let ptr = STORED_BOUNDS.swap(null_mut(), Ordering::SeqCst);
     if !ptr.is_null() {
         // Safety: ptr was created by Box::into_raw

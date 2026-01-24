@@ -9,7 +9,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, WS_EX_COMPOSITED,
 };
 
-use crate::error::AnimationError;
 use crate::tracking::WindowBounds;
 
 /// Slide direction
@@ -106,7 +105,7 @@ pub fn run_animation(
     bounds: &WindowBounds,
     work_area: &RECT,
     slide_in: bool,
-) -> Result<(), AnimationError> {
+) {
     let duration = Duration::from_millis(config.duration_ms as u64);
     let start = Instant::now();
 
@@ -198,8 +197,6 @@ pub fn run_animation(
         let _ = InvalidateRect(Some(hwnd), None, true);
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, original_exstyle);
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
