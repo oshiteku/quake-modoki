@@ -127,8 +127,14 @@ fn register_foreground() {
 
     let title = tracking::get_window_title(hwnd);
     tracking::set_tracked(hwnd);
+    tracking::save_bounds(hwnd);
+    focus::set_target(hwnd);
+    if let Err(e) = focus::install_hook(hwnd) {
+        error!("Focus hook error: {e}");
+    }
+    WINDOW_VISIBLE.store(true, Ordering::SeqCst);
     notification::show_tracked(&title);
-    info!(hwnd = ?hwnd, title = %title, "Window tracked");
+    info!(hwnd = ?hwnd, title = %title, "Window tracked (visible)");
 }
 
 /// Get monitor work area for a window
