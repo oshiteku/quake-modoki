@@ -20,3 +20,7 @@ prek install
 ```
 
 Hooks: `cargo fmt`, `cargo clippy`, `typos`, `trailing-whitespace`, etc.
+
+## License
+
+MIT OR Apache-2.0
