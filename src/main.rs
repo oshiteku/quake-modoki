@@ -9,8 +9,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_F8,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, FindWindowW, GetMessageW, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,
-    MSG, SetForegroundWindow, WM_HOTKEY,
+    EnumWindows, FindWindowW, GetForegroundWindow, GetMessageW, GetWindowTextLengthW,
+    GetWindowTextW, IsWindowVisible, MSG, SetForegroundWindow, WM_HOTKEY,
 };
 use windows::core::{BOOL, w};
 
@@ -73,7 +73,7 @@ fn list_windows() {
     }
 }
 
-fn toggle_notepad() {
+fn toggle_window() {
     let hwnd = unsafe { FindWindowW(None, w!("タイトルなし - メモ帳")) };
     match hwnd {
         Ok(h) if h != HWND::default() => {
@@ -81,11 +81,19 @@ fn toggle_notepad() {
             let currently_visible = WINDOW_VISIBLE.load(Ordering::SeqCst);
 
             if currently_visible {
+                // Restore focus before animation starts
+                let prev = focus::get_previous();
+                if prev != HWND::default() {
+                    let _ = unsafe { SetForegroundWindow(prev) };
+                }
                 // Slide out (visible → hidden)
                 run_animation(h, &config, false);
                 WINDOW_VISIBLE.store(false, Ordering::SeqCst);
-                println!("Window: slide out → hidden");
+                println!("Window: focus restored → slide out → hidden");
             } else {
+                // Save current foreground window before taking focus
+                let prev = unsafe { GetForegroundWindow() };
+                focus::save_previous(prev);
                 // Slide in (hidden → visible)
                 run_animation(h, &config, true);
                 let _ = unsafe { SetForegroundWindow(h) };

@@ -20,6 +20,9 @@ static HOOK_HANDLE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
 /// Target window being monitored
 static TARGET_HWND: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
 
+/// Previous foreground window (for focus restoration)
+static PREV_HWND: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
+
 /// Install focus hook
 /// target_hwnd: window being monitored for focus loss
 pub fn install_hook(target_hwnd: HWND) {
@@ -60,6 +63,16 @@ pub fn set_target(hwnd: HWND) {
 /// Get current target window
 pub fn get_target() -> HWND {
     HWND(TARGET_HWND.load(Ordering::SeqCst) as *mut _)
+}
+
+/// Save previous foreground window for focus restoration
+pub fn save_previous(hwnd: HWND) {
+    PREV_HWND.store(hwnd.0 as *mut _, Ordering::SeqCst);
+}
+
+/// Get previous foreground window
+pub fn get_previous() -> HWND {
+    HWND(PREV_HWND.load(Ordering::SeqCst) as *mut _)
 }
 
 /// Win event callback: fired when foreground window changes
