@@ -1,21 +1,21 @@
 mod animation;
 mod error;
 mod focus;
+mod tracking;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, error, info, trace, warn};
 
 use animation::{AnimConfig, run_animation};
-use global_hotkey::hotkey::{Code, HotKey};
+use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use windows::Win32::Foundation::{HWND, LPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, EnumWindows, FindWindowW, GetForegroundWindow, GetWindowTextLengthW,
-    GetWindowTextW, IsWindowVisible, MsgWaitForMultipleObjectsEx, PeekMessageW,
-    SetForegroundWindow, TranslateMessage, MWMO_INPUTAVAILABLE, MSG, PM_REMOVE, QS_ALLINPUT,
-    WM_QUIT,
+    DispatchMessageW, EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
+    IsWindowVisible, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE,
+    PeekMessageW, QS_ALLINPUT, SetForegroundWindow, TranslateMessage, WM_QUIT,
 };
-use windows::core::{BOOL, w};
+use windows::core::BOOL;
 
 /// Track window visibility state (atomic for thread safety)
 static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false);
@@ -27,17 +27,25 @@ fn main() -> anyhow::Result<()> {
     list_windows();
     debug!("===================");
 
-    let manager = GlobalHotKeyManager::new()
-        .map_err(|e| anyhow::anyhow!("GlobalHotKeyManager: {e}"))?;
-    let hotkey = HotKey::new(None, Code::F8);
+    let manager =
+        GlobalHotKeyManager::new().map_err(|e| anyhow::anyhow!("GlobalHotKeyManager: {e}"))?;
+
+    // Toggle hotkey: F8
+    let hotkey_toggle = HotKey::new(None, Code::F8);
     manager
-        .register(hotkey)
-        .map_err(|e| anyhow::anyhow!("Hotkey register: {e}"))?;
+        .register(hotkey_toggle)
+        .map_err(|e| anyhow::anyhow!("Toggle hotkey register: {e}"))?;
 
-    info!("Hotkey F8 registered (global-hotkey). Press F8 to toggle window visibility.");
-    info!("Press Ctrl+C to exit.");
+    // Tracking hotkey: Ctrl+Alt+Q
+    let hotkey_track = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyQ);
+    manager
+        .register(hotkey_track)
+        .map_err(|e| anyhow::anyhow!("Track hotkey register: {e}"))?;
 
-    run_event_loop()?;
+    info!("Hotkeys registered: F8 (toggle), Ctrl+Alt+Q (track)");
+    info!("Focus a window and press Ctrl+Alt+Q to register it, then F8 to toggle.");
+
+    run_event_loop(hotkey_toggle.id(), hotkey_track.id())?;
 
     if let Err(e) = focus::uninstall_hook() {
         error!("Focus unhook error: {e}");
@@ -46,7 +54,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_event_loop() -> anyhow::Result<()> {
+fn run_event_loop(toggle_id: u32, track_id: u32) -> anyhow::Result<()> {
     let receiver = GlobalHotKeyEvent::receiver();
     let mut msg = MSG::default();
 
@@ -59,7 +67,11 @@ fn run_event_loop() -> anyhow::Result<()> {
         // Check hotkey events (non-blocking)
         while let Ok(event) = receiver.try_recv() {
             if event.state() == HotKeyState::Pressed {
-                toggle_window();
+                match event.id() {
+                    id if id == toggle_id => toggle_window(),
+                    id if id == track_id => register_foreground(),
+                    _ => {}
+                }
             }
         }
 
@@ -102,45 +114,56 @@ fn list_windows() {
     }
 }
 
-fn toggle_window() {
-    let hwnd = unsafe { FindWindowW(None, w!("タイトルなし - メモ帳")) };
-    match hwnd {
-        Ok(h) if h != HWND::default() => {
-            let config = AnimConfig::default();
-            let currently_visible = WINDOW_VISIBLE.load(Ordering::SeqCst);
+fn register_foreground() {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd == HWND::default() {
+        warn!("No foreground window");
+        return;
+    }
 
-            if currently_visible {
-                // Restore focus before animation starts
-                let prev = focus::get_previous();
-                if prev != HWND::default() {
-                    let _ = unsafe { SetForegroundWindow(prev) };
-                }
-                // Slide out (visible → hidden)
-                if let Err(e) = run_animation(h, &config, false) {
-                    error!("Animation error: {e}");
-                }
-                WINDOW_VISIBLE.store(false, Ordering::SeqCst);
-                info!("Window: focus restored → slide out → hidden");
-            } else {
-                // Save current foreground window before taking focus
-                let prev = unsafe { GetForegroundWindow() };
-                focus::save_previous(prev);
-                // Slide in (hidden → visible)
-                if let Err(e) = run_animation(h, &config, true) {
-                    error!("Animation error: {e}");
-                }
-                let _ = unsafe { SetForegroundWindow(h) };
-                focus::set_target(h);
-                if let Err(e) = focus::install_hook(h) {
-                    error!("Focus hook error: {e}");
-                }
-                WINDOW_VISIBLE.store(true, Ordering::SeqCst);
-                info!("Window: slide in → visible + focused");
-            }
+    let title = tracking::get_window_title(hwnd);
+    tracking::set_tracked(hwnd);
+    info!(hwnd = ?hwnd, title = %title, "Window tracked");
+}
+
+fn toggle_window() {
+    // Get tracked window (registered via Ctrl+Alt+Q)
+    if !tracking::is_tracked_valid() {
+        warn!("No tracked window - press Ctrl+Alt+Q to register");
+        return;
+    }
+
+    let hwnd = tracking::get_tracked();
+    let config = AnimConfig::default();
+    let currently_visible = WINDOW_VISIBLE.load(Ordering::SeqCst);
+
+    if currently_visible {
+        // Restore focus before animation starts
+        let prev = focus::get_previous();
+        if prev != HWND::default() {
+            let _ = unsafe { SetForegroundWindow(prev) };
         }
-        _ => {
-            warn!("Target window not found");
+        // Slide out (visible → hidden)
+        if let Err(e) = run_animation(hwnd, &config, false) {
+            error!("Animation error: {e}");
         }
+        WINDOW_VISIBLE.store(false, Ordering::SeqCst);
+        info!("Window: focus restored → slide out → hidden");
+    } else {
+        // Save current foreground window before taking focus
+        let prev = unsafe { GetForegroundWindow() };
+        focus::save_previous(prev);
+        // Slide in (hidden → visible)
+        if let Err(e) = run_animation(hwnd, &config, true) {
+            error!("Animation error: {e}");
+        }
+        let _ = unsafe { SetForegroundWindow(hwnd) };
+        focus::set_target(hwnd);
+        if let Err(e) = focus::install_hook(hwnd) {
+            error!("Focus hook error: {e}");
+        }
+        WINDOW_VISIBLE.store(true, Ordering::SeqCst);
+        info!("Window: slide in → visible + focused");
     }
 }
 
