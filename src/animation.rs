@@ -25,10 +25,7 @@ pub enum Direction {
 /// Easing function type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Easing {
-    Linear,
-    Quad,
     Cubic,
-    Expo,
 }
 
 impl Easing {
@@ -36,18 +33,7 @@ impl Easing {
     /// ease-out variant: fast start, slow end
     pub fn apply(&self, t: f64) -> f64 {
         match self {
-            Easing::Linear => t,
-            Easing::Quad => 1.0 - (1.0 - t).powi(2),
             Easing::Cubic => 1.0 - (1.0 - t).powi(3),
-            Easing::Expo => {
-                if t <= 0.0 {
-                    0.0
-                } else if t >= 1.0 {
-                    1.0
-                } else {
-                    1.0 - 2.0_f64.powf(-10.0 * t)
-                }
-            }
         }
     }
 }
@@ -236,29 +222,6 @@ mod tests {
     // ========== Easing Tests ==========
 
     #[test]
-    fn test_easing_linear_boundaries() {
-        assert_eq!(Easing::Linear.apply(0.0), 0.0);
-        assert_eq!(Easing::Linear.apply(1.0), 1.0);
-    }
-
-    #[test]
-    fn test_easing_linear_mid() {
-        assert_eq!(Easing::Linear.apply(0.5), 0.5);
-    }
-
-    #[test]
-    fn test_easing_quad_boundaries() {
-        assert_eq!(Easing::Quad.apply(0.0), 0.0);
-        assert_eq!(Easing::Quad.apply(1.0), 1.0);
-    }
-
-    #[test]
-    fn test_easing_quad_mid() {
-        // ease-out-quad: 1 - (1 - t)^2 = 1 - 0.25 = 0.75
-        assert!((Easing::Quad.apply(0.5) - 0.75).abs() < 1e-10);
-    }
-
-    #[test]
     fn test_easing_cubic_boundaries() {
         assert_eq!(Easing::Cubic.apply(0.0), 0.0);
         assert_eq!(Easing::Cubic.apply(1.0), 1.0);
@@ -268,12 +231,6 @@ mod tests {
     fn test_easing_cubic_mid() {
         // ease-out-cubic: 1 - (1 - t)^3 = 1 - 0.125 = 0.875
         assert!((Easing::Cubic.apply(0.5) - 0.875).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_easing_expo_boundaries() {
-        assert_eq!(Easing::Expo.apply(0.0), 0.0);
-        assert_eq!(Easing::Expo.apply(1.0), 1.0);
     }
 
     // ========== Lerp Tests ==========
