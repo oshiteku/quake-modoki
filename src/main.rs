@@ -1,8 +1,13 @@
+// Hide console in release builds (background mode)
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod animation;
+mod autolaunch;
 mod error;
 mod focus;
 mod notification;
 mod tracking;
+mod tray;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, error, info, trace, warn};
@@ -10,6 +15,7 @@ use tracing::{debug, error, info, trace, warn};
 use animation::{AnimConfig, run_animation};
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+use tray::TrayState;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
@@ -57,6 +63,11 @@ fn main() -> anyhow::Result<()> {
     list_windows();
     debug!("===================");
 
+    // Initialize system tray
+    let tray = TrayState::new().map_err(|e| anyhow::anyhow!("TrayState: {e}"))?;
+    tray.set_autolaunch_checked(autolaunch::is_enabled());
+    info!("System tray initialized");
+
     let manager =
         GlobalHotKeyManager::new().map_err(|e| anyhow::anyhow!("GlobalHotKeyManager: {e}"))?;
 
@@ -79,7 +90,7 @@ fn main() -> anyhow::Result<()> {
     unsafe { SetConsoleCtrlHandler(Some(ctrl_handler), true) }
         .map_err(|e| anyhow::anyhow!("SetConsoleCtrlHandler: {e}"))?;
 
-    run_event_loop(hotkey_toggle.id(), hotkey_track.id())?;
+    run_event_loop(hotkey_toggle.id(), hotkey_track.id(), &tray)?;
 
     // Restore tracked window to original state on exit
     if tracking::restore_original().is_some() {
@@ -93,8 +104,9 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_event_loop(toggle_id: u32, track_id: u32) -> anyhow::Result<()> {
-    let receiver = GlobalHotKeyEvent::receiver();
+fn run_event_loop(toggle_id: u32, track_id: u32, tray: &TrayState) -> anyhow::Result<()> {
+    let hotkey_rx = GlobalHotKeyEvent::receiver();
+    let menu_rx = tray::menu_receiver();
     let mut msg = MSG::default();
 
     loop {
@@ -110,14 +122,19 @@ fn run_event_loop(toggle_id: u32, track_id: u32) -> anyhow::Result<()> {
         }
 
         // Check hotkey events (non-blocking)
-        while let Ok(event) = receiver.try_recv() {
+        while let Ok(event) = hotkey_rx.try_recv() {
             if event.state() == HotKeyState::Pressed {
                 match event.id() {
                     id if id == toggle_id => toggle_window(),
-                    id if id == track_id => register_foreground(),
+                    id if id == track_id => register_foreground_with_tray(tray),
                     _ => {}
                 }
             }
+        }
+
+        // Check menu events (non-blocking)
+        while let Ok(event) = menu_rx.try_recv() {
+            handle_menu_event(&event, tray);
         }
 
         // Process Win32 messages
@@ -162,36 +179,6 @@ fn list_windows() {
     unsafe {
         let _ = EnumWindows(Some(enum_callback), LPARAM(0));
     }
-}
-
-fn register_foreground() {
-    // Restore previous tracked window before registering new one
-    if tracking::restore_original().is_some() {
-        info!("Previous window restored");
-    }
-
-    let hwnd = unsafe { GetForegroundWindow() };
-    if hwnd == HWND::default() {
-        warn!("No foreground window");
-        return;
-    }
-
-    let title = tracking::get_window_title(hwnd);
-
-    // Save original state before tracking
-    if tracking::save_original(hwnd).is_none() {
-        warn!("Failed to save original state");
-    }
-
-    tracking::set_tracked(hwnd);
-    tracking::save_bounds(hwnd);
-    focus::set_target(hwnd);
-    if let Err(e) = focus::install_hook(hwnd) {
-        error!("Focus hook error: {e}");
-    }
-    WINDOW_VISIBLE.store(true, Ordering::SeqCst);
-    notification::show_tracked(&title);
-    info!(hwnd = ?hwnd, title = %title, "Window tracked (visible)");
 }
 
 /// Get monitor work area for a window
@@ -312,4 +299,71 @@ fn handle_focus_lost() {
     run_animation(target, &config, direction, &bounds, &work_area, false);
     WINDOW_VISIBLE.store(false, Ordering::SeqCst);
     info!(direction = ?direction, "Window: focus lost → hidden");
+}
+
+/// Handle tray menu events
+fn handle_menu_event(event: &muda::MenuEvent, tray: &TrayState) {
+    let id = event.id();
+
+    if tray.is_exit(id) {
+        info!("Exit requested via tray menu");
+        SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+    } else if tray.is_untrack(id) {
+        // Untrack: restore window and clear status
+        if tracking::restore_original().is_some() {
+            info!("Window untracked via tray menu");
+        }
+        if let Err(e) = focus::uninstall_hook() {
+            error!("Focus unhook error: {e}");
+        }
+        WINDOW_VISIBLE.store(false, Ordering::SeqCst);
+        tray.update_status(None);
+    } else if tray.is_autolaunch(id) {
+        // Toggle auto-launch
+        match autolaunch::toggle() {
+            Ok(enabled) => {
+                tray.set_autolaunch_checked(enabled);
+                info!(enabled, "Auto-launch toggled");
+            }
+            Err(e) => {
+                error!("Auto-launch toggle failed: {e}");
+            }
+        }
+    }
+}
+
+/// Register foreground window with tray status update
+fn register_foreground_with_tray(tray: &TrayState) {
+    // Restore previous tracked window before registering new one
+    if tracking::restore_original().is_some() {
+        info!("Previous window restored");
+    }
+
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd == HWND::default() {
+        warn!("No foreground window");
+        tray.update_status(None);
+        return;
+    }
+
+    let title = tracking::get_window_title(hwnd);
+
+    // Save original state before tracking
+    if tracking::save_original(hwnd).is_none() {
+        warn!("Failed to save original state");
+    }
+
+    tracking::set_tracked(hwnd);
+    tracking::save_bounds(hwnd);
+    focus::set_target(hwnd);
+    if let Err(e) = focus::install_hook(hwnd) {
+        error!("Focus hook error: {e}");
+    }
+    WINDOW_VISIBLE.store(true, Ordering::SeqCst);
+
+    // Update tray status
+    tray.update_status(Some(&title));
+
+    notification::show_tracked(&title);
+    info!(hwnd = ?hwnd, title = %title, "Window tracked (visible)");
 }
