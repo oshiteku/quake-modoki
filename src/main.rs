@@ -10,7 +10,10 @@ use tracing::{debug, error, info, trace, warn};
 use animation::{AnimConfig, run_animation};
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-use windows::Win32::Foundation::{HWND, LPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
     IsWindowVisible, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE,
@@ -128,6 +131,20 @@ fn register_foreground() {
     info!(hwnd = ?hwnd, title = %title, "Window tracked");
 }
 
+/// Get monitor work area for a window
+fn get_work_area(hwnd: HWND) -> Option<RECT> {
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY) };
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
+        Some(info.rcWork)
+    } else {
+        None
+    }
+}
+
 fn toggle_window() {
     // Get tracked window (registered via Ctrl+Alt+Q)
     if !tracking::is_tracked_valid() {
@@ -139,24 +156,56 @@ fn toggle_window() {
     let config = AnimConfig::default();
     let currently_visible = WINDOW_VISIBLE.load(Ordering::SeqCst);
 
+    // Get work area for direction calculation
+    let work_area = match get_work_area(hwnd) {
+        Some(wa) => wa,
+        None => {
+            error!("GetMonitorInfo failed");
+            return;
+        }
+    };
+
     if currently_visible {
-        // Restore focus before animation starts
+        // === SLIDE OUT (visible → hidden) ===
+        // 1. Capture current bounds BEFORE hiding
+        let bounds = match tracking::save_bounds(hwnd) {
+            Some(b) => b,
+            None => {
+                error!("GetWindowRect failed");
+                return;
+            }
+        };
+
+        // 2. Calculate direction based on overlap
+        let direction = tracking::calc_direction(&bounds, &work_area);
+
+        // 3. Restore focus before animation starts
         let prev = focus::get_previous();
         if prev != HWND::default() {
             let _ = unsafe { SetForegroundWindow(prev) };
         }
-        // Slide out (visible → hidden)
-        if let Err(e) = run_animation(hwnd, &config, false) {
+
+        // 4. Slide out
+        if let Err(e) = run_animation(hwnd, &config, direction, &bounds, &work_area, false) {
             error!("Animation error: {e}");
         }
         WINDOW_VISIBLE.store(false, Ordering::SeqCst);
-        info!("Window: focus restored → slide out → hidden");
+        info!(direction = ?direction, "Window: focus restored → slide out → hidden");
     } else {
-        // Save current foreground window before taking focus
+        // === SLIDE IN (hidden → visible) ===
+        // 1. Load stored bounds or capture current position
+        let bounds = tracking::load_bounds()
+            .unwrap_or_else(|| tracking::save_bounds(hwnd).expect("GetWindowRect failed"));
+
+        // 2. Calculate direction based on stored position
+        let direction = tracking::calc_direction(&bounds, &work_area);
+
+        // 3. Save current foreground window before taking focus
         let prev = unsafe { GetForegroundWindow() };
         focus::save_previous(prev);
-        // Slide in (hidden → visible)
-        if let Err(e) = run_animation(hwnd, &config, true) {
+
+        // 4. Slide in
+        if let Err(e) = run_animation(hwnd, &config, direction, &bounds, &work_area, true) {
             error!("Animation error: {e}");
         }
         let _ = unsafe { SetForegroundWindow(hwnd) };
@@ -165,7 +214,7 @@ fn toggle_window() {
             error!("Focus hook error: {e}");
         }
         WINDOW_VISIBLE.store(true, Ordering::SeqCst);
-        info!("Window: slide in → visible + focused");
+        info!(direction = ?direction, "Window: slide in → visible + focused");
     }
 }
 
@@ -179,10 +228,31 @@ fn handle_focus_lost() {
         return;
     }
 
+    // Get work area
+    let work_area = match get_work_area(target) {
+        Some(wa) => wa,
+        None => {
+            error!("GetMonitorInfo failed");
+            return;
+        }
+    };
+
+    // Capture current bounds before hiding
+    let bounds = match tracking::save_bounds(target) {
+        Some(b) => b,
+        None => {
+            error!("GetWindowRect failed");
+            return;
+        }
+    };
+
+    // Calculate direction based on overlap
+    let direction = tracking::calc_direction(&bounds, &work_area);
+
     let config = AnimConfig::default();
-    if let Err(e) = run_animation(target, &config, false) {
+    if let Err(e) = run_animation(target, &config, direction, &bounds, &work_area, false) {
         error!("Animation error: {e}");
     }
     WINDOW_VISIBLE.store(false, Ordering::SeqCst);
-    info!("Window: focus lost → hidden");
+    info!(direction = ?direction, "Window: focus lost → hidden");
 }

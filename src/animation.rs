@@ -3,15 +3,14 @@
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::DwmFlush;
-use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
-};
+use windows::Win32::Graphics::Gdi::InvalidateRect;
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOZORDER,
     SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, WS_EX_COMPOSITED,
 };
 
 use crate::error::AnimationError;
+use crate::tracking::WindowBounds;
 
 /// Slide direction
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,9 +47,6 @@ pub fn lerp(a: i32, b: i32, t: f64) -> i32 {
 pub struct AnimConfig {
     pub duration_ms: u32,
     pub easing: Easing,
-    pub direction: Direction,
-    pub width_percent: u32,
-    pub height_percent: u32,
 }
 
 impl Default for AnimConfig {
@@ -58,9 +54,6 @@ impl Default for AnimConfig {
         Self {
             duration_ms: 200,
             easing: Easing::Cubic,
-            direction: Direction::Left,
-            width_percent: 40,
-            height_percent: 100,
         }
     }
 }
@@ -68,13 +61,12 @@ impl Default for AnimConfig {
 /// Calculate window position based on direction and progress
 /// Returns (x, y) for the window
 ///
-/// slide_in=true:  progress 0→1 moves from hidden → visible
-/// slide_in=false: progress 0→1 moves from visible → hidden
+/// slide_in=true:  progress 0→1 moves from off-screen → original position
+/// slide_in=false: progress 0→1 moves from original position → off-screen
 pub fn calc_position(
     direction: Direction,
     work_area: &RECT,
-    width: i32,
-    height: i32,
+    original: &WindowBounds,
     progress: f64,
     slide_in: bool,
 ) -> (i32, i32) {
@@ -82,52 +74,39 @@ pub fn calc_position(
 
     match direction {
         Direction::Left => {
-            let x = lerp(-width, 0, t);
-            (x, work_area.top)
+            let hidden_x = work_area.left - original.width;
+            let x = lerp(hidden_x, original.x, t);
+            (x, original.y)
         }
         Direction::Right => {
-            let visible_x = work_area.right - width;
-            let x = lerp(work_area.right, visible_x, t);
-            (x, work_area.top)
+            let hidden_x = work_area.right;
+            let x = lerp(hidden_x, original.x, t);
+            (x, original.y)
         }
         Direction::Top => {
-            let y = lerp(-height, 0, t);
-            (work_area.left, y)
+            let hidden_y = work_area.top - original.height;
+            let y = lerp(hidden_y, original.y, t);
+            (original.x, y)
         }
         Direction::Bottom => {
-            let visible_y = work_area.bottom - height;
-            let y = lerp(work_area.bottom, visible_y, t);
-            (work_area.left, y)
+            let hidden_y = work_area.bottom;
+            let y = lerp(hidden_y, original.y, t);
+            (original.x, y)
         }
     }
 }
 
 /// Run slide animation
-/// slide_in=true: hidden → visible (show window, animate in)
-/// slide_in=false: visible → hidden (animate out, hide window)
+/// slide_in=true: off-screen → original position (show window, animate in)
+/// slide_in=false: original position → off-screen (animate out, hide window)
 pub fn run_animation(
     hwnd: HWND,
     config: &AnimConfig,
+    direction: Direction,
+    bounds: &WindowBounds,
+    work_area: &RECT,
     slide_in: bool,
 ) -> Result<(), AnimationError> {
-    // Get monitor work area
-    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY) };
-    let mut info = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        ..Default::default()
-    };
-    if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
-        return Err(AnimationError::MonitorInfo);
-    }
-
-    let work_area = info.rcWork;
-    let screen_w = work_area.right - work_area.left;
-    let screen_h = work_area.bottom - work_area.top;
-
-    // Calculate window dimensions
-    let width = (screen_w * config.width_percent as i32) / 100;
-    let height = (screen_h * config.height_percent as i32) / 100;
-
     let duration = Duration::from_millis(config.duration_ms as u64);
     let start = Instant::now();
 
@@ -155,15 +134,15 @@ pub fn run_animation(
     // Show window at start position if sliding in
     if slide_in {
         frame_sync(); // sync BEFORE window becomes visible
-        let (x, y) = calc_position(config.direction, &work_area, width, height, 0.0, true);
+        let (x, y) = calc_position(direction, work_area, bounds, 0.0, true);
         unsafe {
             let _ = SetWindowPos(
                 hwnd,
                 Some(HWND_TOPMOST),
                 x,
                 y,
-                width,
-                height,
+                bounds.width,
+                bounds.height,
                 SWP_SHOWWINDOW,
             );
         }
@@ -178,7 +157,7 @@ pub fn run_animation(
         let t = config.easing.apply(raw_t);
         let is_final = raw_t >= 1.0;
 
-        let (x, y) = calc_position(config.direction, &work_area, width, height, t, slide_in);
+        let (x, y) = calc_position(direction, work_area, bounds, t, slide_in);
 
         // Atomic hide: combine final position with SWP_HIDEWINDOW
         // slide_in: allow activation (no SWP_NOACTIVATE)
@@ -192,7 +171,15 @@ pub fn run_animation(
         };
 
         unsafe {
-            let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, width, height, flags);
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                x,
+                y,
+                bounds.width,
+                bounds.height,
+                flags,
+            );
         }
 
         if is_final {
@@ -264,59 +251,75 @@ mod tests {
         }
     }
 
+    fn make_bounds(x: i32, y: i32, width: i32, height: i32) -> WindowBounds {
+        WindowBounds {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
     #[test]
     fn test_calc_position_left_slide_in_start() {
         let work_area = make_work_area(0, 0, 1920, 1080);
-        let (x, y) = calc_position(Direction::Left, &work_area, 768, 1080, 0.0, true);
-        assert_eq!(x, -768); // hidden: x = -width
-        assert_eq!(y, 0);
+        let bounds = make_bounds(100, 50, 768, 1080);
+        let (x, y) = calc_position(Direction::Left, &work_area, &bounds, 0.0, true);
+        assert_eq!(x, -768); // hidden: x = work_area.left - width
+        assert_eq!(y, 50); // y = original.y
     }
 
     #[test]
     fn test_calc_position_left_slide_in_end() {
         let work_area = make_work_area(0, 0, 1920, 1080);
-        let (x, y) = calc_position(Direction::Left, &work_area, 768, 1080, 1.0, true);
-        assert_eq!(x, 0); // visible: x = 0
-        assert_eq!(y, 0);
+        let bounds = make_bounds(100, 50, 768, 1080);
+        let (x, y) = calc_position(Direction::Left, &work_area, &bounds, 1.0, true);
+        assert_eq!(x, 100); // visible: x = original.x
+        assert_eq!(y, 50);
     }
 
     #[test]
     fn test_calc_position_left_slide_out_end() {
         let work_area = make_work_area(0, 0, 1920, 1080);
-        let (x, y) = calc_position(Direction::Left, &work_area, 768, 1080, 1.0, false);
-        assert_eq!(x, -768); // hidden: x = -width
-        assert_eq!(y, 0);
+        let bounds = make_bounds(100, 50, 768, 1080);
+        let (x, y) = calc_position(Direction::Left, &work_area, &bounds, 1.0, false);
+        assert_eq!(x, -768); // hidden: x = work_area.left - width
+        assert_eq!(y, 50);
     }
 
     #[test]
     fn test_calc_position_right_slide_in_start() {
         let work_area = make_work_area(0, 0, 1920, 1080);
-        let (x, y) = calc_position(Direction::Right, &work_area, 768, 1080, 0.0, true);
-        assert_eq!(x, 1920); // hidden: x = screen_width
-        assert_eq!(y, 0);
+        let bounds = make_bounds(1000, 50, 768, 1080);
+        let (x, y) = calc_position(Direction::Right, &work_area, &bounds, 0.0, true);
+        assert_eq!(x, 1920); // hidden: x = work_area.right
+        assert_eq!(y, 50);
     }
 
     #[test]
     fn test_calc_position_right_slide_in_end() {
         let work_area = make_work_area(0, 0, 1920, 1080);
-        let (x, y) = calc_position(Direction::Right, &work_area, 768, 1080, 1.0, true);
-        assert_eq!(x, 1920 - 768); // visible: x = screen_width - width
-        assert_eq!(y, 0);
+        let bounds = make_bounds(1000, 50, 768, 1080);
+        let (x, y) = calc_position(Direction::Right, &work_area, &bounds, 1.0, true);
+        assert_eq!(x, 1000); // visible: x = original.x
+        assert_eq!(y, 50);
     }
 
     #[test]
     fn test_calc_position_top_slide_in() {
         let work_area = make_work_area(0, 0, 1920, 1080);
-        let (x, y) = calc_position(Direction::Top, &work_area, 1920, 540, 0.0, true);
-        assert_eq!(x, 0);
-        assert_eq!(y, -540); // hidden: y = -height
+        let bounds = make_bounds(200, 100, 1920, 540);
+        let (x, y) = calc_position(Direction::Top, &work_area, &bounds, 0.0, true);
+        assert_eq!(x, 200); // x = original.x
+        assert_eq!(y, -540); // hidden: y = work_area.top - height
     }
 
     #[test]
     fn test_calc_position_bottom_slide_in() {
         let work_area = make_work_area(0, 0, 1920, 1080);
-        let (x, y) = calc_position(Direction::Bottom, &work_area, 1920, 540, 0.0, true);
-        assert_eq!(x, 0);
-        assert_eq!(y, 1080); // hidden: y = screen_height
+        let bounds = make_bounds(200, 500, 1920, 540);
+        let (x, y) = calc_position(Direction::Bottom, &work_area, &bounds, 0.0, true);
+        assert_eq!(x, 200); // x = original.x
+        assert_eq!(y, 1080); // hidden: y = work_area.bottom
     }
 }
