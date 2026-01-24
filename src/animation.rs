@@ -11,6 +11,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, WS_EX_COMPOSITED,
 };
 
+use crate::error::AnimationError;
+
 /// Slide direction
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -117,7 +119,11 @@ pub fn calc_position(
 /// Run slide animation
 /// slide_in=true: hidden → visible (show window, animate in)
 /// slide_in=false: visible → hidden (animate out, hide window)
-pub fn run_animation(hwnd: HWND, config: &AnimConfig, slide_in: bool) {
+pub fn run_animation(
+    hwnd: HWND,
+    config: &AnimConfig,
+    slide_in: bool,
+) -> Result<(), AnimationError> {
     // Get monitor work area
     let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY) };
     let mut info = MONITORINFO {
@@ -125,7 +131,7 @@ pub fn run_animation(hwnd: HWND, config: &AnimConfig, slide_in: bool) {
         ..Default::default()
     };
     if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
-        return;
+        return Err(AnimationError::MonitorInfo);
     }
 
     let work_area = info.rcWork;
@@ -219,6 +225,8 @@ pub fn run_animation(hwnd: HWND, config: &AnimConfig, slide_in: bool) {
         let _ = InvalidateRect(Some(hwnd), None, true);
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, original_exstyle);
     }
+
+    Ok(())
 }
 
 #[cfg(test)]

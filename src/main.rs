@@ -1,7 +1,9 @@
 mod animation;
+mod error;
 mod focus;
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use tracing::{debug, error, info, trace, warn};
 
 use animation::{AnimConfig, run_animation};
 use windows::Win32::Foundation::{HWND, LPARAM};
@@ -20,16 +22,18 @@ static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false);
 const HOTKEY_ID: i32 = 1;
 
 fn main() -> anyhow::Result<()> {
-    println!("=== Window List ===");
+    tracing_subscriber::fmt::init();
+
+    debug!("=== Window List ===");
     list_windows();
-    println!("===================\n");
+    debug!("===================");
 
     unsafe {
         RegisterHotKey(None, HOTKEY_ID, MOD_NOREPEAT, VK_F8.0 as u32)?;
     }
 
-    println!("Hotkey F8 registered. Press F8 to toggle window visibility.");
-    println!("Press Ctrl+C to exit.");
+    info!("Hotkey F8 registered. Press F8 to toggle window visibility.");
+    info!("Press Ctrl+C to exit.");
 
     let mut msg = MSG::default();
     while unsafe { GetMessageW(&mut msg, None, 0, 0) }.as_bool() {
@@ -44,7 +48,9 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    focus::uninstall_hook();
+    if let Err(e) = focus::uninstall_hook() {
+        error!("Focus unhook error: {e}");
+    }
     unsafe { UnregisterHotKey(None, HOTKEY_ID)? };
 
     Ok(())
@@ -60,7 +66,7 @@ fn list_windows() {
                     GetWindowTextW(hwnd, &mut buf);
                     let title = String::from_utf16_lossy(&buf[..len as usize]);
                     if !title.is_empty() {
-                        println!("  {:?}: {}", hwnd, title);
+                        trace!(hwnd = ?hwnd, title, "window");
                     }
                 }
             }
@@ -87,24 +93,30 @@ fn toggle_window() {
                     let _ = unsafe { SetForegroundWindow(prev) };
                 }
                 // Slide out (visible → hidden)
-                run_animation(h, &config, false);
+                if let Err(e) = run_animation(h, &config, false) {
+                    error!("Animation error: {e}");
+                }
                 WINDOW_VISIBLE.store(false, Ordering::SeqCst);
-                println!("Window: focus restored → slide out → hidden");
+                info!("Window: focus restored → slide out → hidden");
             } else {
                 // Save current foreground window before taking focus
                 let prev = unsafe { GetForegroundWindow() };
                 focus::save_previous(prev);
                 // Slide in (hidden → visible)
-                run_animation(h, &config, true);
+                if let Err(e) = run_animation(h, &config, true) {
+                    error!("Animation error: {e}");
+                }
                 let _ = unsafe { SetForegroundWindow(h) };
                 focus::set_target(h);
-                focus::install_hook(h);
+                if let Err(e) = focus::install_hook(h) {
+                    error!("Focus hook error: {e}");
+                }
                 WINDOW_VISIBLE.store(true, Ordering::SeqCst);
-                println!("Window: slide in → visible + focused");
+                info!("Window: slide in → visible + focused");
             }
         }
         _ => {
-            println!("Target window not found");
+            warn!("Target window not found");
         }
     }
 }
@@ -120,7 +132,9 @@ fn handle_focus_lost() {
     }
 
     let config = AnimConfig::default();
-    run_animation(target, &config, false);
+    if let Err(e) = run_animation(target, &config, false) {
+        error!("Animation error: {e}");
+    }
     WINDOW_VISIBLE.store(false, Ordering::SeqCst);
-    println!("Window: focus lost → hidden");
+    info!("Window: focus lost → hidden");
 }

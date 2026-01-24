@@ -3,8 +3,10 @@
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_USER};
+
+use crate::error::FocusError;
 
 /// Custom message for focus change notification
 pub const WM_FOCUS_CHANGED: u32 = WM_USER + 1;
@@ -25,7 +27,7 @@ static PREV_HWND: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
 
 /// Install focus hook
 /// target_hwnd: window being monitored for focus loss
-pub fn install_hook(target_hwnd: HWND) {
+pub fn install_hook(target_hwnd: HWND) -> Result<(), FocusError> {
     TARGET_HWND.store(target_hwnd.0 as *mut _, Ordering::SeqCst);
 
     unsafe {
@@ -39,20 +41,26 @@ pub fn install_hook(target_hwnd: HWND) {
             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
         );
 
-        if !hook.is_invalid() {
-            HOOK_HANDLE.store(hook.0, Ordering::SeqCst);
+        if hook.is_invalid() {
+            return Err(FocusError::HookInstall);
         }
+        HOOK_HANDLE.store(hook.0, Ordering::SeqCst);
     }
+
+    Ok(())
 }
 
 /// Uninstall focus hook
-pub fn uninstall_hook() {
+pub fn uninstall_hook() -> Result<(), FocusError> {
     let handle = HOOK_HANDLE.swap(null_mut(), Ordering::SeqCst);
     if !handle.is_null() {
         unsafe {
-            let _ = UnhookWinEvent(HWINEVENTHOOK(handle));
+            if !UnhookWinEvent(HWINEVENTHOOK(handle)).as_bool() {
+                return Err(FocusError::HookUninstall);
+            }
         }
     }
+    Ok(())
 }
 
 /// Update target window

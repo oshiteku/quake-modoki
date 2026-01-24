@@ -136,6 +136,7 @@ dependencies = [
  "dirs",
  "serde",
  "serde_json",
+ "thiserror",
  "tracing",
  "tracing-subscriber",
  "windows",
