@@ -4,10 +4,11 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
+    GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    HWND_TOPMOST, SW_HIDE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetWindowPos, ShowWindow,
+    GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+    SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, WS_EX_COMPOSITED,
 };
 
 /// Slide direction
@@ -138,8 +139,30 @@ pub fn run_animation(hwnd: HWND, config: &AnimConfig, slide_in: bool) {
     let duration = Duration::from_millis(config.duration_ms as u64);
     let start = Instant::now();
 
+    // Frame sync: wait for VSync before rendering
+    fn frame_sync() {
+        unsafe {
+            if DwmFlush().is_err() {
+                std::thread::sleep(Duration::from_millis(16));
+            }
+        }
+    }
+
+    // Apply WS_EX_COMPOSITED for double-buffered rendering (anti-flicker)
+    let original_exstyle = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    unsafe {
+        SetWindowLongPtrW(
+            hwnd,
+            GWL_EXSTYLE,
+            original_exstyle | WS_EX_COMPOSITED.0 as isize,
+        );
+        // Force repaint after style change to refresh DWM buffer
+        let _ = InvalidateRect(Some(hwnd), None, true);
+    }
+
     // Show window at start position if sliding in
     if slide_in {
+        frame_sync(); // sync BEFORE window becomes visible
         let (x, y) = calc_position(config.direction, &work_area, width, height, 0.0, true);
         unsafe {
             let _ = SetWindowPos(
@@ -156,35 +179,41 @@ pub fn run_animation(hwnd: HWND, config: &AnimConfig, slide_in: bool) {
 
     // Animation loop
     loop {
+        frame_sync(); // sync BEFORE position update
+
         let elapsed = start.elapsed();
         let raw_t = (elapsed.as_secs_f64() / duration.as_secs_f64()).min(1.0);
         let t = config.easing.apply(raw_t);
+        let is_final = raw_t >= 1.0;
 
         let (x, y) = calc_position(config.direction, &work_area, width, height, t, slide_in);
 
+        // Atomic hide: combine final position with SWP_HIDEWINDOW
+        let flags = if is_final && !slide_in {
+            SWP_NOACTIVATE | SWP_HIDEWINDOW
+        } else {
+            SWP_NOACTIVATE
+        };
+
         unsafe {
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_TOPMOST),
-                x,
-                y,
-                width,
-                height,
-                SWP_NOACTIVATE,
-            );
-            let _ = DwmFlush(); // VSync: ~16.67ms @ 60Hz
+            let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, width, height, flags);
         }
 
-        if raw_t >= 1.0 {
+        if is_final {
             break;
         }
     }
 
-    // Hide window after slide out
+    // Ensure hide composited
     if !slide_in {
-        unsafe {
-            let _ = ShowWindow(hwnd, SW_HIDE);
-        }
+        frame_sync();
+    }
+
+    // Restore original extended style
+    unsafe {
+        // Invalidate before style restoration to prevent black artifacts
+        let _ = InvalidateRect(Some(hwnd), None, true);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, original_exstyle);
     }
 }
 
