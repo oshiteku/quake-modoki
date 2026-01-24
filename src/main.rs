@@ -14,15 +14,41 @@ use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
 };
+use windows::Win32::System::Console::{
+    CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, SetConsoleCtrlHandler,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
     IsWindowVisible, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE,
-    PeekMessageW, QS_ALLINPUT, SetForegroundWindow, TranslateMessage, WM_QUIT,
+    PeekMessageW, QS_ALLINPUT, SetForegroundWindow, TranslateMessage, WM_ENDSESSION,
+    WM_QUERYENDSESSION, WM_QUIT,
 };
 use windows::core::BOOL;
 
 /// Track window visibility state (atomic for thread safety)
 static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false);
+
+/// Shutdown requested via signal (Ctrl-C, console close, etc.)
+static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Console control handler: signal shutdown via atomic flag
+unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
+    match ctrl_type {
+        x if x == CTRL_C_EVENT || x == CTRL_BREAK_EVENT => {
+            // Signal main loop to exit gracefully
+            SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+            BOOL(1)
+        }
+        x if x == CTRL_CLOSE_EVENT => {
+            // Terminal closing - must restore here (5s timeout)
+            // Process terminates after handler returns
+            let _ = tracking::restore_original();
+            SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+            BOOL(1)
+        }
+        _ => BOOL(0),
+    }
+}
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -49,7 +75,16 @@ fn main() -> anyhow::Result<()> {
     info!("Hotkeys registered: F8 (toggle), Ctrl+Alt+Q (track)");
     info!("Focus a window and press Ctrl+Alt+Q to register it, then F8 to toggle.");
 
+    // Install Ctrl-C handler for graceful shutdown
+    unsafe { SetConsoleCtrlHandler(Some(ctrl_handler), true) }
+        .map_err(|e| anyhow::anyhow!("SetConsoleCtrlHandler: {e}"))?;
+
     run_event_loop(hotkey_toggle.id(), hotkey_track.id())?;
+
+    // Restore tracked window to original state on exit
+    if tracking::restore_original().is_some() {
+        info!("Window restored on exit");
+    }
 
     if let Err(e) = focus::uninstall_hook() {
         error!("Focus unhook error: {e}");
@@ -63,6 +98,12 @@ fn run_event_loop(toggle_id: u32, track_id: u32) -> anyhow::Result<()> {
     let mut msg = MSG::default();
 
     loop {
+        // Check shutdown flag (set by ctrl_handler)
+        if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+            info!("Shutdown requested");
+            return Ok(());
+        }
+
         // Wait for message OR 16ms timeout
         unsafe {
             MsgWaitForMultipleObjectsEx(None, 16, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
@@ -81,10 +122,15 @@ fn run_event_loop(toggle_id: u32, track_id: u32) -> anyhow::Result<()> {
 
         // Process Win32 messages
         while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
-            if msg.message == WM_QUIT {
-                return Ok(());
-            }
             match msg.message {
+                WM_QUIT => return Ok(()),
+                WM_QUERYENDSESSION => {
+                    // Allow system to proceed with logoff/shutdown
+                }
+                WM_ENDSESSION if msg.wParam.0 != 0 => {
+                    info!("Session ending");
+                    return Ok(());
+                }
                 m if m == focus::WM_FOCUS_CHANGED => handle_focus_lost(),
                 _ => unsafe {
                     let _ = TranslateMessage(&msg);
@@ -119,6 +165,11 @@ fn list_windows() {
 }
 
 fn register_foreground() {
+    // Restore previous tracked window before registering new one
+    if tracking::restore_original().is_some() {
+        info!("Previous window restored");
+    }
+
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd == HWND::default() {
         warn!("No foreground window");
@@ -126,6 +177,12 @@ fn register_foreground() {
     }
 
     let title = tracking::get_window_title(hwnd);
+
+    // Save original state before tracking
+    if tracking::save_original(hwnd).is_none() {
+        warn!("Failed to save original state");
+    }
+
     tracking::set_tracked(hwnd);
     tracking::save_bounds(hwnd);
     focus::set_target(hwnd);

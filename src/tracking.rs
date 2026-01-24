@@ -5,7 +5,9 @@ use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsWindow,
+    GWL_EXSTYLE, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+    HWND_NOTOPMOST, HWND_TOPMOST, IsWindow, IsWindowVisible, SET_WINDOW_POS_FLAGS, SW_HIDE,
+    SW_SHOW, SetWindowPos, ShowWindow,
 };
 
 use crate::animation::Direction;
@@ -15,6 +17,12 @@ static TRACKED_HWND: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 
 /// Stored window bounds for animation
 static STORED_BOUNDS: AtomicPtr<WindowBounds> = AtomicPtr::new(null_mut());
+
+/// Stored original window state for restoration
+static ORIGINAL_STATE: AtomicPtr<OriginalState> = AtomicPtr::new(null_mut());
+
+/// WS_EX_TOPMOST extended style flag
+const WS_EX_TOPMOST: isize = 0x0000_0008;
 
 /// Window bounds (position + size)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +45,15 @@ impl WindowBounds {
     }
 }
 
+/// Original window state for restoration on exit/re-track
+#[derive(Debug, Clone)]
+pub struct OriginalState {
+    pub hwnd: HWND,
+    pub bounds: WindowBounds,
+    pub was_visible: bool,
+    pub was_topmost: bool,
+}
+
 /// Register window for toggle control
 pub fn set_tracked(hwnd: HWND) {
     TRACKED_HWND.store(hwnd.0 as *mut _, Ordering::SeqCst);
@@ -51,6 +68,85 @@ pub fn get_tracked() -> HWND {
 pub fn is_tracked_valid() -> bool {
     let hwnd = get_tracked();
     hwnd != HWND::default() && unsafe { IsWindow(Some(hwnd)) }.as_bool()
+}
+
+/// Save original window state before tracking
+/// Captures visibility, bounds, and topmost state for later restoration
+pub fn save_original(hwnd: HWND) -> Option<OriginalState> {
+    if hwnd == HWND::default() {
+        return None;
+    }
+
+    // Capture visibility
+    let was_visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
+
+    // Capture bounds
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
+        return None;
+    }
+    let bounds = WindowBounds::from_rect(&rect);
+
+    // Capture topmost state
+    let exstyle = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let was_topmost = (exstyle & WS_EX_TOPMOST) != 0;
+
+    let state = OriginalState {
+        hwnd,
+        bounds,
+        was_visible,
+        was_topmost,
+    };
+
+    // Store (drop previous if exists)
+    let boxed = Box::new(state.clone());
+    let old = ORIGINAL_STATE.swap(Box::into_raw(boxed), Ordering::SeqCst);
+    if !old.is_null() {
+        drop(unsafe { Box::from_raw(old) });
+    }
+
+    Some(state)
+}
+
+/// Restore original window state
+/// Returns Some(()) on success, None if no state stored or window destroyed
+pub fn restore_original() -> Option<()> {
+    let ptr = ORIGINAL_STATE.swap(null_mut(), Ordering::SeqCst);
+    if ptr.is_null() {
+        return None;
+    }
+
+    let state = unsafe { Box::from_raw(ptr) };
+
+    // Skip if window destroyed
+    if !unsafe { IsWindow(Some(state.hwnd)) }.as_bool() {
+        return None;
+    }
+
+    // Restore position and z-order
+    let z_order = if state.was_topmost {
+        HWND_TOPMOST
+    } else {
+        HWND_NOTOPMOST
+    };
+
+    unsafe {
+        let _ = SetWindowPos(
+            state.hwnd,
+            Some(z_order),
+            state.bounds.x,
+            state.bounds.y,
+            state.bounds.width,
+            state.bounds.height,
+            SET_WINDOW_POS_FLAGS(0),
+        );
+
+        // Restore visibility
+        let cmd = if state.was_visible { SW_SHOW } else { SW_HIDE };
+        let _ = ShowWindow(state.hwnd, cmd);
+    }
+
+    Some(())
 }
 
 /// Save current window bounds before slide-out
@@ -88,6 +184,15 @@ fn clear_bounds() {
     let ptr = STORED_BOUNDS.swap(null_mut(), Ordering::SeqCst);
     if !ptr.is_null() {
         // Safety: ptr was created by Box::into_raw
+        drop(unsafe { Box::from_raw(ptr) });
+    }
+}
+
+/// Clear original state (test-only)
+#[cfg(test)]
+fn clear_original() {
+    let ptr = ORIGINAL_STATE.swap(null_mut(), Ordering::SeqCst);
+    if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
 }
@@ -365,5 +470,43 @@ mod tests {
         let work_area = make_rect(0, 0, 1920, 1080);
         let dir = calc_direction(&bounds, &work_area);
         assert_eq!(dir, Direction::Bottom);
+    }
+
+    // ========== OriginalState Tests ==========
+
+    #[test]
+    fn test_save_original_null_hwnd_returns_none() {
+        clear_original();
+        assert!(save_original(HWND::default()).is_none());
+    }
+
+    #[test]
+    fn test_restore_original_empty_returns_none() {
+        clear_original();
+        assert!(restore_original().is_none());
+    }
+
+    #[test]
+    fn test_clear_original_clears_state() {
+        // Store a state manually
+        let state = OriginalState {
+            hwnd: HWND(0x12345678 as *mut _),
+            bounds: WindowBounds {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+            was_visible: true,
+            was_topmost: false,
+        };
+        let boxed = Box::new(state);
+        ORIGINAL_STATE.store(Box::into_raw(boxed), Ordering::SeqCst);
+
+        // Clear should drop
+        clear_original();
+
+        // Should be empty now
+        assert!(restore_original().is_none());
     }
 }
