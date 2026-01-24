@@ -34,3 +34,8 @@ repos:
         types: [rust]
         pass_filenames: false
         entry: cargo clippy --all-targets --all-features -- -D warnings
+
+  - repo: https://github.com/est31/cargo-udeps
+    rev: v0.1.47
+    hooks:
+    - id: udeps
