@@ -1,6 +1,7 @@
 mod animation;
 mod error;
 mod focus;
+mod notification;
 mod tracking;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -123,6 +124,7 @@ fn register_foreground() {
 
     let title = tracking::get_window_title(hwnd);
     tracking::set_tracked(hwnd);
+    notification::show_tracked(&title);
     info!(hwnd = ?hwnd, title = %title, "Window tracked");
 }
 
