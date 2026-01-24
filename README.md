@@ -1,5 +1,7 @@
 # Quake Modoki
 
+![Demo](assets/demo.gif)
+
 Windows utility enabling Quake Mode behavior—any window slides in/out from screen edge via global hotkey.
 
 ## Requirements
@@ -34,6 +36,11 @@ prek install
 ```
 
 Hooks: `cargo fmt`, `cargo clippy`, `typos`, `trailing-whitespace`, etc.
+
+## Made with
+
+- Icon: Nano Banana Pro (Gemini 3 Pro Image Preview)
+- Code: [Claude Code](https://claude.ai/code)
 
 ## License
 
