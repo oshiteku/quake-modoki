@@ -154,7 +154,7 @@ pub fn is_enabled() -> bool {
     hkcu.open_subkey_with_flags(SETTINGS_KEY, KEY_READ)
         .ok()
         .and_then(|key| key.get_value::<u32, _>(EDGE_ENABLED).ok())
-        .is_some_and(|v| v != 0)
+        != Some(0)
 }
 
 /// Enable/disable edge trigger
