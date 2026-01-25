@@ -113,7 +113,7 @@ fn run_event_loop(toggle_id: u32, track_id: u32, tray: &TrayState) -> anyhow::Re
     let mut msg = MSG::default();
 
     // Edge trigger state
-    let edge_config = edge::load_config();
+    let edge_config = edge::EdgeConfig::default();
     let mut edge_state = edge::EdgeState::default();
 
     loop {
@@ -218,7 +218,7 @@ fn check_edge_trigger(
 
     let visible = WINDOW_VISIBLE.load(Ordering::SeqCst);
 
-    let action = edge::check_and_transition(
+    edge::check_and_transition(
         state,
         config,
         direction,
@@ -226,13 +226,7 @@ fn check_edge_trigger(
         cursor,
         &work_area,
         bounds.as_ref(),
-    );
-
-    if action != edge::EdgeAction::None {
-        Some(action)
-    } else {
-        None
-    }
+    )
 }
 
 fn list_windows() {

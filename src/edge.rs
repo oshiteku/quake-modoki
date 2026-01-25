@@ -11,9 +11,6 @@ use windows::Win32::Foundation::{POINT, RECT};
 
 const SETTINGS_KEY: &str = r"Software\QuakeModoki";
 const EDGE_ENABLED: &str = "EdgeEnabled";
-const EDGE_THRESHOLD: &str = "EdgeThreshold";
-const EDGE_SHOW_DELAY: &str = "EdgeShowDelay";
-const EDGE_HIDE_DELAY: &str = "EdgeHideDelay";
 
 #[derive(Debug, Error)]
 pub enum EdgeError {
@@ -56,7 +53,6 @@ pub enum EdgeState {
 /// Action to perform after state transition
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EdgeAction {
-    None,
     Show,
     Hide,
 }
@@ -81,7 +77,7 @@ pub fn cursor_in_window(cursor: POINT, bounds: &WindowBounds) -> bool {
 }
 
 /// Check and transition state machine
-/// Returns action to perform (Show, Hide, or None)
+/// Returns Some(action) when show/hide needed, None otherwise
 pub fn check_and_transition(
     state: &mut EdgeState,
     config: &EdgeConfig,
@@ -90,7 +86,7 @@ pub fn check_and_transition(
     cursor: POINT,
     work_area: &RECT,
     bounds: Option<&WindowBounds>,
-) -> EdgeAction {
+) -> Option<EdgeAction> {
     let at_edge = detect_edge(cursor, work_area, direction, config.threshold_px);
     let in_window = bounds.is_some_and(|b| cursor_in_window(cursor, b));
 
@@ -101,19 +97,19 @@ pub fn check_and_transition(
                     since: Instant::now(),
                 };
             }
-            EdgeAction::None
+            None
         }
         EdgeState::PendingShow { since } => {
             if !at_edge {
                 // Left edge before delay
                 *state = EdgeState::Idle;
-                EdgeAction::None
+                None
             } else if since.elapsed().as_millis() >= config.show_delay_ms as u128 {
                 // Delay elapsed, trigger show
                 *state = EdgeState::Active;
-                EdgeAction::Show
+                Some(EdgeAction::Show)
             } else {
-                EdgeAction::None
+                None
             }
         }
         EdgeState::Active => {
@@ -123,19 +119,19 @@ pub fn check_and_transition(
                     since: Instant::now(),
                 };
             }
-            EdgeAction::None
+            None
         }
         EdgeState::PendingHide { since } => {
             if in_window || at_edge {
                 // Returned to window/edge, cancel hide
                 *state = EdgeState::Active;
-                EdgeAction::None
+                None
             } else if since.elapsed().as_millis() >= config.hide_delay_ms as u128 {
                 // Delay elapsed, trigger hide
                 *state = EdgeState::Idle;
-                EdgeAction::Hide
+                Some(EdgeAction::Hide)
             } else {
-                EdgeAction::None
+                None
             }
         }
     }
@@ -170,40 +166,6 @@ pub fn toggle() -> Result<bool, EdgeError> {
     let new_state = !is_enabled();
     set_enabled(new_state)?;
     Ok(new_state)
-}
-
-/// Load config from registry (defaults if not found)
-pub fn load_config() -> EdgeConfig {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let key = match hkcu.open_subkey_with_flags(SETTINGS_KEY, KEY_READ) {
-        Ok(k) => k,
-        Err(_) => return EdgeConfig::default(),
-    };
-
-    let defaults = EdgeConfig::default();
-    EdgeConfig {
-        threshold_px: key
-            .get_value::<u32, _>(EDGE_THRESHOLD)
-            .map(|v| v as i32)
-            .unwrap_or(defaults.threshold_px),
-        show_delay_ms: key
-            .get_value::<u32, _>(EDGE_SHOW_DELAY)
-            .unwrap_or(defaults.show_delay_ms),
-        hide_delay_ms: key
-            .get_value::<u32, _>(EDGE_HIDE_DELAY)
-            .unwrap_or(defaults.hide_delay_ms),
-    }
-}
-
-/// Save config to registry
-#[allow(dead_code)]
-pub fn save_config(config: &EdgeConfig) -> Result<(), EdgeError> {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu.create_subkey(SETTINGS_KEY)?;
-    key.set_value(EDGE_THRESHOLD, &(config.threshold_px as u32))?;
-    key.set_value(EDGE_SHOW_DELAY, &config.show_delay_ms)?;
-    key.set_value(EDGE_HIDE_DELAY, &config.hide_delay_ms)?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -392,7 +354,7 @@ mod tests {
             &work_area,
             None,
         );
-        assert_eq!(action, EdgeAction::None);
+        assert_eq!(action, None);
         assert!(matches!(state, EdgeState::PendingShow { .. }));
     }
 
@@ -418,7 +380,7 @@ mod tests {
             &work_area,
             None,
         );
-        assert_eq!(action, EdgeAction::None);
+        assert_eq!(action, None);
         assert!(matches!(state, EdgeState::Idle));
     }
 
@@ -447,7 +409,7 @@ mod tests {
             &work_area,
             None,
         );
-        assert_eq!(action, EdgeAction::Show);
+        assert_eq!(action, Some(EdgeAction::Show));
         assert!(matches!(state, EdgeState::Active));
     }
 
@@ -472,7 +434,7 @@ mod tests {
             &work_area,
             Some(&bounds),
         );
-        assert_eq!(action, EdgeAction::None);
+        assert_eq!(action, None);
         assert!(matches!(state, EdgeState::PendingHide { .. }));
     }
 
@@ -499,7 +461,7 @@ mod tests {
             &work_area,
             Some(&bounds),
         );
-        assert_eq!(action, EdgeAction::None);
+        assert_eq!(action, None);
         assert!(matches!(state, EdgeState::Active));
     }
 
@@ -529,7 +491,7 @@ mod tests {
             &work_area,
             Some(&bounds),
         );
-        assert_eq!(action, EdgeAction::Hide);
+        assert_eq!(action, Some(EdgeAction::Hide));
         assert!(matches!(state, EdgeState::Idle));
     }
 
@@ -549,7 +511,7 @@ mod tests {
             &work_area,
             None,
         );
-        assert_eq!(action, EdgeAction::None);
+        assert_eq!(action, None);
         assert!(matches!(state, EdgeState::Idle));
     }
 
@@ -582,34 +544,5 @@ mod tests {
         let new_state = toggle().expect("toggle failed");
         assert!(!new_state);
         assert!(!is_enabled());
-    }
-
-    #[test]
-    fn test_load_config_defaults_when_no_key() {
-        // When key doesn't exist, should return defaults
-        // Note: Don't delete key as it may interfere with parallel tests
-        let defaults = EdgeConfig::default();
-        let config = load_config();
-        // At minimum, values should be valid
-        assert!(config.threshold_px > 0);
-        assert!(config.show_delay_ms > 0 || config.show_delay_ms == defaults.show_delay_ms);
-    }
-
-    #[test]
-    fn test_save_load_config() {
-        let config = EdgeConfig {
-            threshold_px: 5,
-            show_delay_ms: 200,
-            hide_delay_ms: 500,
-        };
-        save_config(&config).expect("save config failed");
-
-        let loaded = load_config();
-        assert_eq!(loaded.threshold_px, config.threshold_px);
-        assert_eq!(loaded.show_delay_ms, config.show_delay_ms);
-        assert_eq!(loaded.hide_delay_ms, config.hide_delay_ms);
-
-        // Restore defaults
-        let _ = save_config(&EdgeConfig::default());
     }
 }
