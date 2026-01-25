@@ -18,9 +18,11 @@ pub struct TrayState {
     _icon: TrayIcon,
     menu_untrack: MenuId,
     menu_autolaunch: MenuId,
+    menu_edge_trigger: MenuId,
     menu_exit: MenuId,
     status_item: MenuItem,
     autolaunch_item: CheckMenuItem,
+    edge_trigger_item: CheckMenuItem,
 }
 
 impl TrayState {
@@ -31,11 +33,14 @@ impl TrayState {
         let untrack_item = MenuItem::with_id("untrack", "Untrack", true, None);
         let autolaunch_item =
             CheckMenuItem::with_id("autolaunch", "Start with Windows", true, false, None);
+        let edge_trigger_item =
+            CheckMenuItem::with_id("edge_trigger", "Edge Trigger", true, false, None);
         let exit_item = MenuItem::with_id("exit", "Exit", true, None);
 
         // Store IDs
         let menu_untrack = untrack_item.id().clone();
         let menu_autolaunch = autolaunch_item.id().clone();
+        let menu_edge_trigger = edge_trigger_item.id().clone();
         let menu_exit = exit_item.id().clone();
 
         // Build menu
@@ -47,6 +52,8 @@ impl TrayState {
         menu.append(&untrack_item)
             .map_err(|e| TrayError::Menu(e.to_string()))?;
         menu.append(&autolaunch_item)
+            .map_err(|e| TrayError::Menu(e.to_string()))?;
+        menu.append(&edge_trigger_item)
             .map_err(|e| TrayError::Menu(e.to_string()))?;
         menu.append(&PredefinedMenuItem::separator())
             .map_err(|e| TrayError::Menu(e.to_string()))?;
@@ -68,9 +75,11 @@ impl TrayState {
             _icon: tray,
             menu_untrack,
             menu_autolaunch,
+            menu_edge_trigger,
             menu_exit,
             status_item,
             autolaunch_item,
+            edge_trigger_item,
         })
     }
 
@@ -101,6 +110,16 @@ impl TrayState {
     /// Check if event matches exit menu
     pub fn is_exit(&self, id: &MenuId) -> bool {
         *id == self.menu_exit
+    }
+
+    /// Check if event matches edge trigger menu
+    pub fn is_edge_trigger(&self, id: &MenuId) -> bool {
+        *id == self.menu_edge_trigger
+    }
+
+    /// Set edge trigger checkbox state
+    pub fn set_edge_trigger_checked(&self, checked: bool) {
+        self.edge_trigger_item.set_checked(checked);
     }
 }
 
