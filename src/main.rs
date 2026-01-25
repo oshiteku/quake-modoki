@@ -3,6 +3,7 @@
 
 mod animation;
 mod autolaunch;
+mod edge;
 mod error;
 mod focus;
 mod notification;
@@ -16,17 +17,18 @@ use animation::{AnimConfig, run_animation};
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use tray::TrayState;
-use windows::Win32::Foundation::{HWND, LPARAM, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
+    MonitorFromPoint, MonitorFromWindow,
 };
 use windows::Win32::System::Console::{
     CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, SetConsoleCtrlHandler,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
-    IsWindowVisible, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE,
-    PeekMessageW, QS_ALLINPUT, SetForegroundWindow, TranslateMessage, WM_ENDSESSION,
+    DispatchMessageW, EnumWindows, GetCursorPos, GetForegroundWindow, GetWindowTextLengthW,
+    GetWindowTextW, IsWindowVisible, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
+    PM_REMOVE, PeekMessageW, QS_ALLINPUT, SetForegroundWindow, TranslateMessage, WM_ENDSESSION,
     WM_QUERYENDSESSION, WM_QUIT,
 };
 use windows::core::BOOL;
@@ -66,6 +68,7 @@ fn main() -> anyhow::Result<()> {
     // Initialize system tray
     let tray = TrayState::new().map_err(|e| anyhow::anyhow!("TrayState: {e}"))?;
     tray.set_autolaunch_checked(autolaunch::is_enabled());
+    tray.set_edge_trigger_checked(edge::is_enabled());
     info!("System tray initialized");
 
     let manager =
@@ -109,6 +112,10 @@ fn run_event_loop(toggle_id: u32, track_id: u32, tray: &TrayState) -> anyhow::Re
     let menu_rx = tray::menu_receiver();
     let mut msg = MSG::default();
 
+    // Edge trigger state
+    let edge_config = edge::load_config();
+    let mut edge_state = edge::EdgeState::default();
+
     loop {
         // Check shutdown flag (set by ctrl_handler)
         if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
@@ -125,7 +132,10 @@ fn run_event_loop(toggle_id: u32, track_id: u32, tray: &TrayState) -> anyhow::Re
         while let Ok(event) = hotkey_rx.try_recv() {
             if event.state() == HotKeyState::Pressed {
                 match event.id() {
-                    id if id == toggle_id => toggle_window(),
+                    id if id == toggle_id => {
+                        toggle_window();
+                        edge::reset_state(&mut edge_state); // Hotkey wins, reset edge
+                    }
                     id if id == track_id => register_foreground_with_tray(tray),
                     _ => {}
                 }
@@ -134,7 +144,23 @@ fn run_event_loop(toggle_id: u32, track_id: u32, tray: &TrayState) -> anyhow::Re
 
         // Check menu events (non-blocking)
         while let Ok(event) = menu_rx.try_recv() {
-            handle_menu_event(&event, tray);
+            handle_menu_event(&event, tray, &mut edge_state);
+        }
+
+        // Edge trigger check (polling)
+        if edge::is_enabled()
+            && tracking::is_tracked_valid()
+            && let Some(action) = check_edge_trigger(&mut edge_state, &edge_config)
+        {
+            match action {
+                edge::EdgeAction::Show if !WINDOW_VISIBLE.load(Ordering::SeqCst) => {
+                    toggle_window();
+                }
+                edge::EdgeAction::Hide if WINDOW_VISIBLE.load(Ordering::SeqCst) => {
+                    toggle_window();
+                }
+                _ => {}
+            }
         }
 
         // Process Win32 messages
@@ -148,13 +174,64 @@ fn run_event_loop(toggle_id: u32, track_id: u32, tray: &TrayState) -> anyhow::Re
                     info!("Session ending");
                     return Ok(());
                 }
-                m if m == focus::WM_FOCUS_CHANGED => handle_focus_lost(),
+                m if m == focus::WM_FOCUS_CHANGED => {
+                    handle_focus_lost();
+                    edge::reset_state(&mut edge_state); // Focus lost resets edge state
+                }
                 _ => unsafe {
                     let _ = TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 },
             }
         }
+    }
+}
+
+/// Check edge trigger and return action if any
+fn check_edge_trigger(
+    state: &mut edge::EdgeState,
+    config: &edge::EdgeConfig,
+) -> Option<edge::EdgeAction> {
+    // Get cursor position
+    let mut cursor = POINT::default();
+    if unsafe { GetCursorPos(&mut cursor) }.is_err() {
+        return None;
+    }
+
+    // Get work area for monitor containing cursor
+    let monitor = unsafe { MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST) };
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
+        return None;
+    }
+    let work_area = info.rcWork;
+
+    // Get window bounds and direction
+    let bounds = tracking::load_bounds();
+    let direction = bounds
+        .as_ref()
+        .map(|b| tracking::calc_direction(b, &work_area))
+        .unwrap_or(animation::Direction::Left);
+
+    let visible = WINDOW_VISIBLE.load(Ordering::SeqCst);
+
+    let action = edge::check_and_transition(
+        state,
+        config,
+        direction,
+        visible,
+        cursor,
+        &work_area,
+        bounds.as_ref(),
+    );
+
+    if action != edge::EdgeAction::None {
+        Some(action)
+    } else {
+        None
     }
 }
 
@@ -302,7 +379,7 @@ fn handle_focus_lost() {
 }
 
 /// Handle tray menu events
-fn handle_menu_event(event: &muda::MenuEvent, tray: &TrayState) {
+fn handle_menu_event(event: &muda::MenuEvent, tray: &TrayState, edge_state: &mut edge::EdgeState) {
     let id = event.id();
 
     if tray.is_exit(id) {
@@ -317,6 +394,7 @@ fn handle_menu_event(event: &muda::MenuEvent, tray: &TrayState) {
             error!("Focus unhook error: {e}");
         }
         WINDOW_VISIBLE.store(false, Ordering::SeqCst);
+        edge::reset_state(edge_state);
         tray.update_status(None);
     } else if tray.is_autolaunch(id) {
         // Toggle auto-launch
@@ -327,6 +405,18 @@ fn handle_menu_event(event: &muda::MenuEvent, tray: &TrayState) {
             }
             Err(e) => {
                 error!("Auto-launch toggle failed: {e}");
+            }
+        }
+    } else if tray.is_edge_trigger(id) {
+        // Toggle edge trigger
+        match edge::toggle() {
+            Ok(enabled) => {
+                tray.set_edge_trigger_checked(enabled);
+                edge::reset_state(edge_state);
+                info!(enabled, "Edge trigger toggled");
+            }
+            Err(e) => {
+                error!("Edge trigger toggle failed: {e}");
             }
         }
     }
