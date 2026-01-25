@@ -14,6 +14,7 @@ Windows utility enabling Quake Mode behavior—any window slides in/out from scr
 - 🖥️ **System tray** — Status, Untrack, Start with Windows, Exit
 - 🔔 **Desktop notification** — Toast when window tracked
 - 🚀 **Auto-launch** — Optional startup with Windows (Registry-based)
+- 🖱️ **Edge trigger** — Show/hide by moving cursor to screen edge (toggleable)
 
 ## Installation
 
@@ -28,7 +29,7 @@ cargo install quake-modoki --locked
 | `Ctrl+Alt+Q` | Track current window |
 | `F8` | Toggle window visibility |
 
-Tray icon menu: Untrack / Start with Windows / Exit
+Tray icon menu: Untrack / Edge trigger / Start with Windows / Exit
 
 ## Development
 
