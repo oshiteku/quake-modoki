@@ -58,8 +58,10 @@ pub fn toggle() -> Result<bool, AutoLaunchError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn test_is_enabled_initially_false() {
         // Clean up first
         let _ = disable();
@@ -67,6 +69,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_enable_disable_cycle() {
         // Clean state
         let _ = disable();
@@ -82,6 +85,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_toggle() {
         // Clean state
         let _ = disable();

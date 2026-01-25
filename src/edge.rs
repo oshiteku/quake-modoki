@@ -171,6 +171,7 @@ pub fn toggle() -> Result<bool, EdgeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::thread::sleep;
     use std::time::Duration;
 
@@ -518,6 +519,7 @@ mod tests {
     // ========== Registry Tests ==========
 
     #[test]
+    #[serial]
     fn test_is_enabled_default_false() {
         // Ensure disabled first
         let _ = set_enabled(false);
@@ -525,6 +527,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_set_enabled_roundtrip() {
         set_enabled(true).expect("set enabled failed");
         assert!(is_enabled());
@@ -534,6 +537,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_toggle() {
         let _ = set_enabled(false);
 
