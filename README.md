@@ -1,5 +1,7 @@
 # Quake Modoki
 
+[![Crates.io Version](https://img.shields.io/crates/v/quake-modoki)](https://crates.io/crates/quake-modoki)
+
 ![Demo](assets/demo.gif)
 
 Windows utility enabling Quake Mode behavior—any window slides in/out from screen edge via global hotkey.
